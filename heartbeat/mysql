@@ -31,6 +31,7 @@
 #   OCF_RESKEY_user
 #   OCF_RESKEY_group
 #   OCF_RESKEY_test_table
+#   OCF_RESKEY_test_table_ms
 #   OCF_RESKEY_test_user
 #   OCF_RESKEY_test_passwd
 #   OCF_RESKEY_enable_creation
@@ -70,6 +71,7 @@ fi
 OCF_RESKEY_client_binary_default="mysql"
 OCF_RESKEY_test_user_default="root"
 OCF_RESKEY_test_table_default="mysql.user"
+OCF_RESKEY_test_table_ms_default="test.test"
 OCF_RESKEY_test_passwd_default=""
 OCF_RESKEY_enable_creation_default=0
 OCF_RESKEY_additional_parameters_default=""
@@ -94,6 +96,7 @@ MYSQL_BINDIR=`dirname ${OCF_RESKEY_binary}`
 
 : ${OCF_RESKEY_test_user=${OCF_RESKEY_test_user_default}}
 : ${OCF_RESKEY_test_table=${OCF_RESKEY_test_table_default}}
+: ${OCF_RESKEY_test_table=${OCF_RESKEY_test_table_ms_default}}
 : ${OCF_RESKEY_test_passwd=${OCF_RESKEY_test_passwd_default}}
 
 : ${OCF_RESKEY_enable_creation=${OCF_RESKEY_enable_creation_default}}
@@ -218,6 +221,15 @@ Table to be tested in monitor statement (in database.table notation)
 </longdesc>
 <shortdesc lang="en">MySQL test table</shortdesc>
 <content type="string" default="${OCF_RESKEY_test_table_default}" />
+</parameter>
+
+<parameter name="test_table_ms" unique="0" required="0">
+<longdesc lang="en">
+Table to be tested in monitor statement (in database.table notation)
+for monitoring master/slave replication
+</longdesc>
+<shortdesc lang="en">MySQL master/slave test table</shortdesc>
+<content type="string" default="${OCF_RESKEY_test_table_ms_default}" />
 </parameter>
 
 <parameter name="test_user" unique="0" required="0">
@@ -630,6 +642,54 @@ mysql_monitor() {
 	if [ $rc -ne 0 ]; then
 	    ocf_log err "Failed to select from $test_table";
 	    return $OCF_ERR_GENERIC;
+	fi
+
+	# Check status of replication
+	# If this instance is configured as master, set a timestamp in n crm
+	# attribute and write the same timestamp in a test table in the db.
+	# If this instance is configured as slace, read the timestamp from
+	# the crm attribute, and check that it has been replicated from the
+	# master db
+	if ocf_is_ms; then
+            if ! is_slave; then
+		local date
+		local len
+		date=$(date)
+		len=$(echo $date | wc -m)
+		$CRM_ATTR -n mysql_replication_test -v "$date"
+		$MYSQL $mysql_options test <<EOF
+DROP TABLE IF EXISTS test;
+CREATE TABLE test (test VARCHAR($len));
+INSERT INTO test VALUES ("$date");
+EOF
+            else
+		local test_attr
+		local test_db
+		# Retry to avoid race where the timestamp has been set in the
+		# attribute but not in the db, or it hasn't been replicated yet
+                # TODO: this doesn't tolerate much slave lag, nor does it care
+		# about the max_slave_lag param.
+		for try in {1..3}; do
+                    test_attr=$($CRM_ATTR -n mysql_replication_test -Q -G)
+                    test_db=$($MYSQL $mysql_options test -e "select test from test\G" | tail -n1 | cut -d " " -f 2-)
+                    if [ -z "$test_db" ]; then
+			if [ $try -lt 3 ]; then
+                            sleep 5
+                            continue
+			fi
+			ocf_log err "Could not get data from database, replication not working"
+			return $OCF_ERR_INSTALLED
+                    fi
+                    if [ "$test_attr" != "$test_db" ]; then
+			if [ $try -lt 3 ]; then
+                            sleep 5
+                            continue
+			fi
+			ocf_log err "Wrong data in database, replication not working"
+			return $OCF_ERR_INSTALLED
+                    fi
+		done
+            fi
 	fi
     fi
 
