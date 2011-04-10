@@ -657,10 +657,10 @@ mysql_monitor() {
 		date=$(date)
 		len=$(echo $date | wc -m)
 		$CRM_ATTR -n mysql_replication_test -v "$date"
-		$MYSQL $mysql_options test <<EOF
-DROP TABLE IF EXISTS test;
-CREATE TABLE test (test VARCHAR($len));
-INSERT INTO test VALUES ("$date");
+		$MYSQL $mysql_options <<EOF
+DROP TABLE IF EXISTS $OCF_RESKEY_test_table_ms;
+CREATE TABLE $OCF_RESKEY_test_table_ms (test VARCHAR($len));
+INSERT INTO $OCF_RESKEY_test_table_ms VALUES ("$date");
 EOF
             else
 		local test_attr
@@ -671,7 +671,7 @@ EOF
 		# about the max_slave_lag param.
 		for try in {1..3}; do
                     test_attr=$($CRM_ATTR -n mysql_replication_test -Q -G)
-                    test_db=$($MYSQL $mysql_options test -e "select test from test\G" | tail -n1 | cut -d " " -f 2-)
+                    test_db=$($MYSQL $mysql_options -e "select test from $OCF_RESKEY_test_table_ms\G" | tail -n1 | cut -d " " -f 2-)
                     if [ -z "$test_db" ]; then
 			if [ $try -lt 3 ]; then
                             sleep 5
